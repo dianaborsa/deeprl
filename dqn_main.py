@@ -3,6 +3,7 @@ import tensorflow as tf
 import numpy as np 
 import random
 import dqn_agent as dqn
+import os
 
 flags = tf.app.flags
 
@@ -16,14 +17,15 @@ flags.DEFINE_integer('nEpochs'  ,  10, 'Nr of epochs per optimization(PI/VI)')
 flags.DEFINE_integer('BATCH_SIZE', 32, 'Mini-Batch size')
 flags.DEFINE_boolean('training', False, 'Training Flag')
 flags.DEFINE_boolean('evaluate', False, 'Evaluation Flag')
+flags.DEFINE_boolean('best', False, 'Evaluation Best Model Flag')
 flags.DEFINE_integer('random_seed',123, 'Random seed')
 flags.DEFINE_integer('learningRateIndex', 1, 'learningRate = 1e(learningRateIndex-6)')
 
 
 # ---------------------------------------------------------
 # Hyper Parameters
-ENV_NAME = 'MountainCar-v0'
-#ENV_NAME = 'CartPole-v1'
+#ENV_NAME = 'MountainCar-v0'
+ENV_NAME = 'CartPole-v1'
 #ENV_NAME = 'CarRacing-v0'
 #ENV_NAME = 'FlappyBird-v0'
 #ENV_NAME = 'Breakout-ram-v0'
@@ -33,6 +35,18 @@ ENV_NAME = 'MountainCar-v0'
 REPLAY_SIZE = 10000 # max replay buffer
 
 ERROR_THRESHOLD= 10^-5
+
+
+MODEL_DIR = '../exp/'+ENV_NAME+'_ml/models'
+SUMMARY_SAVE_PATH = '../exp/'+ENV_NAME+'_dqn/tb_logs/ep_'+str(FLAGS.nEpisodes)+'_'+str(FLAGS.nSamples)+'/lr_'+str(FLAGS.learningRateIndex)
+CHECKPOINT_SAVE_PATH = SUMMARY_SAVE_PATH+'_model.ckpt'
+BESTMODEL_SAVE_PATH  = SUMMARY_SAVE_PATH+'_best_model.ckpt'
+
+MODEL_DIR = '../exp/'+ENV_NAME+'_oc/models'
+try:
+	os.stat(MODEL_DIR)
+except:
+	os.makedirs(MODEL_DIR)
 
 def playoutEpisode(env, agent, nSamples, RENDERING_FLAG=False, epsilon=0.9):
 	#enter enviroment
@@ -67,12 +81,12 @@ def collectExperience(env, agent, nEpisodes, nSamples):
 		if agent.replayMemory.memSize>REPLAY_SIZE:
 			agent.replayMemory.downsizeMemory(REPLAY_SIZE)
 
-def evaluateNetwork(env, agent, nEpisodes,nSamples):
+def evaluateNetwork(env, agent, nEpisodes,nSamples, RENDERING_FLAG=True):
 	# enter enviroment
 	cstate = env.reset()
 	total_reward = 0
 	for i in xrange(nEpisodes):
-		_, episode_reward = playoutEpisode(env, agent, nSamples, RENDERING_FLAG = True, epsilon=0.0)
+		_, episode_reward = playoutEpisode(env, agent, nSamples, RENDERING_FLAG, epsilon=0.0)
 		total_reward += episode_reward
 
 	average_reward = total_reward/nEpisodes
@@ -103,14 +117,14 @@ def main():
 	# 1. Build model
 	# ===================================
 
-	model = agent.onlineNetwork
-	(x, a, y_) = (model["state_placeholder"], model["action_placeholder"], model["target_placeholder"])
-	q_s, y = (model["Q_s"], model["Q_sa"])
+	# model = agent.onlineNetwork
+	# (x, a, y_) = (model["state_placeholder"], model["action_placeholder"], model["target_placeholder"])
+	# q_s, y = (model["Q_s"], model["Q_sa"])
 
-	# define loss as the Bellman residual
-	loss = tf.reduce_mean(((y_-y)**2))
-	normalize_loss = tf.reduce_mean((1-y/y_)**2)
-	V = tf.reduce_max(q_s, reduction_indices=[1]) 
+	# # define loss as the Bellman residual
+	# loss = tf.reduce_mean(((y_-y)**2))
+	# normalize_loss = tf.reduce_mean((1-y/y_)**2)
+	# V = tf.reduce_max(q_s, reduction_indices=[1]) 
 	
 	# # compute targets operation
 	# r = tf.placeholder(tf.float32, shape=[None])
@@ -121,59 +135,91 @@ def main():
 	# =====================================
 	# 2. Train model
 	# =====================================
-	train_op = tf.train.AdamOptimizer(learning_rate=(10**(FLAGS.learningRateIndex-5))).minimize(loss)
+	train_op = tf.train.AdamOptimizer(learning_rate=(10**(FLAGS.learningRateIndex-5))).minimize(agent.loss)
 	#train_op = tf.train.AdamOptimizer(learning_rate=0.0001).minimize(loss)
 	#train_op = tf.train.AdamOptimizer(learning_rate=0.001).minimize(loss)
 	#train_op = tf.train.RMSPropOptimizer(learning_rate=0.001).minimize(loss)
 
+	# summary suff
+	onpolicy_reward_ep = tf.placeholder("float")
+	policy_performance = onpolicy_reward_ep 
+	tf.scalar_summary("policy_performance", policy_performance)
+	tf.scalar_summary("value_loss", agent.loss)
+	summary_op = tf.merge_all_summaries()
+
 	nSamplesOpt = 5000
-	with tf.Session() as sess: 
-		sess.run(tf.initialize_all_variables())
+	saver = tf.train.Saver()
+	best_reward = 0.0
+	if FLAGS.training:
+		with tf.Session() as sess: 
+			sess.run(tf.initialize_all_variables())
 
-		# first collect some experience
-		collectExperience(env, agent, nEpisodes, nSamples)
+			writer = tf.train.SummaryWriter(SUMMARY_SAVE_PATH, sess.graph_def)
 
-		# repeat untill convergence
-		for valueIter in range(maxIter):
+			# first collect some experience
+			collectExperience(env, agent, nEpisodes, nSamples)
 
-		# 	repeat for k steps 
-			for epoch in range(nEpochs):
-		# 		sample experience from memoryReplay
-				sizeOfWorkingMemory = min(nSamplesOpt, agent.replayMemory.memSize)
-				(cstates, actions, rewards, nstates, terminals) = agent.getMiniBatch(sizeOfWorkingMemory)
+			# repeat untill convergence
+			for valueIter in range(maxIter):
 
-				with tf.variable_scope('target_net_scope'):
-					targets  = sess.run(agent.target_op, feed_dict={agent._input: nstates, agent._rewards: rewards, agent._terminals: terminals})
-					#print targets
+			# 	repeat for k steps 
+				for epoch in range(nEpochs):
+			# 		sample experience from memoryReplay
+					sizeOfWorkingMemory = min(nSamplesOpt, agent.replayMemory.memSize)
+					(cstates, actions, rewards, nstates, terminals) = agent.getMiniBatch(sizeOfWorkingMemory)
 
-				for startBatch, endBatch in  zip( range(0,sizeOfWorkingMemory,BATCH_SIZE), range(BATCH_SIZE,sizeOfWorkingMemory,BATCH_SIZE)):
-		# 			train/update onlineNetwork
-					with tf.variable_scope('online_net_scope'):
-						sess.run(train_op, feed_dict={x:cstates[startBatch:endBatch], a:actions[startBatch:endBatch], y_:targets[startBatch:endBatch]})
-					
-				training_error = sess.run(loss, feed_dict={x:cstates, a:actions, y_:targets})
-				if training_error < ERROR_THRESHOLD:
-					print('Breaking?')
-					break
-				# print("Training error: %.6f"%training_error)
+					with tf.variable_scope('target_net_scope'):
+						targets  = sess.run(agent.target_op, feed_dict={agent._input: nstates, agent._rewards: rewards, agent._terminals: terminals})
+						#print targets
 
-		# 		collect experience (online exploratory strategy)
-				collectExperience(env, agent, nEpisodes, nSamples)
+					for startBatch, endBatch in  zip( range(0,sizeOfWorkingMemory,BATCH_SIZE), range(BATCH_SIZE,sizeOfWorkingMemory,BATCH_SIZE)):
+			# 			train/update onlineNetwork
+						with tf.variable_scope('online_net_scope'):
+							sess.run(train_op, feed_dict={agent._input:cstates[startBatch:endBatch], agent.a:actions[startBatch:endBatch], agent.y_:targets[startBatch:endBatch]})
+						
+					training_error = sess.run(agent.loss, feed_dict={agent._input:cstates, agent.a:actions, agent.y_:targets})
+					if training_error < ERROR_THRESHOLD:
+						print('Breaking?')
+						break
+					# print("Training error: %.6f"%training_error)
 
-		# 		add experience to the replayMemory
+			# 		collect experience (online exploratory strategy)
+					collectExperience(env, agent, nEpisodes, nSamples)
 
-		# 	update targetNetwork
-			print('Updating target network')
-			agent.updateTargetNetwork(sess)
+			# 		add experience to the replayMemory
 
-		# end
+			# 	update targetNetwork
+				print('Updating target network')
+				agent.updateTargetNetwork(sess)
 
-		# 	evaluate learning
-			if valueIter%10==0:
-				average_reward = evaluateNetwork(env, agent, 3, 500)
-				print('Iter %d Current performance %f'%(valueIter,average_reward))
-				print("Training error: %f"%training_error)
+			# end
 
+			# 	evaluate learning
+				if valueIter%1==0:
+					average_reward = evaluateNetwork(env, agent, 3, 500, RENDERING_FLAG=False)
+					print('Iter %d Current performance %f'%(valueIter,average_reward))
+					print("Training error: %f"%training_error)
+					summary = sess.run(summary_op, feed_dict={agent._input: cstates, agent.a:actions, agent.y_:targets, onpolicy_reward_ep:average_reward})
+					writer.add_summary(summary, valueIter)
+
+	if FLAGS.evaluate:
+		#saver = tf.train.Saver()
+		with tf.Session() as sess:
+
+			sess.run(tf.initialize_all_variables())
+
+			print("Loading models from "+CHECKPOINT_SAVE_PATH)
+			saver.restore(sess, CHECKPOINT_SAVE_PATH)
+			avg_reward, std_reward = evaluateNetwork(env, agent, 1, 50, RENDERING_FLAG=True)
+
+	if FLAGS.best:
+		with tf.Session() as sess:
+
+			sess.run(tf.initialize_all_variables())
+
+			print("Loading models from "+BESTMODEL_SAVE_PATH)
+			saver.restore(sess, BESTMODEL_SAVE_PATH)
+			avg_reward, std_reward = evaluateNetwork(env, agent, 1, 50, RENDERING_FLAG=True)
 
 
 
