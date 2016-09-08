@@ -46,16 +46,24 @@ class DQN():
 
 	def initializeNetwork(self):
 
+		# placeholders
+		self._input  = tf.placeholder(tf.float32, shape=[None, self.in_size])
+		self.a       = tf.placeholder(tf.float32, shape=[None, self.nActions] ) 
+		self.y_      = tf.placeholder(tf.float32, shape=[None])
+
+
 		with tf.variable_scope('online_net_scope'):
 			print('Initializing onlineNetwork')
 			model = self.getModel(self.in_size, self.nActions)
 			self.onlineNetwork = model
+			#self.onlineQ_sa = tf.reduce_sum(tf.mul(self.onlineNetwork,self.a) , reduction_indices=[1])
 
 
 		with tf.variable_scope('target_net_scope'):
 			print('Initializing targetNetwork')
 			targetNetwork = self.getModel(self.in_size, self.nActions)
 			self.targetNetwork = targetNetwork
+			#self.targetV = tf.reduce_max(self.targetNetwork, reduction_indices=[1]) 
 
 	def getOneHotForActions(self, actions):
 		actions_onehot = np.zeros((len(actions), self.nActions))
@@ -66,18 +74,17 @@ class DQN():
 		return np.array(is_done, int)
 
 	def getTarget_Op(self):
-		q_s = self.targetNetwork['Q_s']
-		V   = tf.reduce_max(q_s, reduction_indices=[1]) 
+		
+		V_target    = tf.reduce_max(self.targetNetwork, reduction_indices=[1]) 
+		Q_sa_online = tf.reduce_sum(tf.mul(self.onlineNetwork,self.a) , reduction_indices=[1])
 	
 		# compute targets operation
-		r        = tf.placeholder(tf.float32, shape=[None])
-		terminal = tf.placeholder(tf.float32, shape=[None]) 
+		self._rewards   = tf.placeholder(tf.float32, shape=[None])
+		self._terminals = tf.placeholder(tf.float32, shape=[None]) 
 		
-		self._input     = self.targetNetwork['state_placeholder']
-		self._rewards   = r
-		self._terminals = terminal
+		self.target_op = self._rewards+self.discount*V_target*(1-self._terminals)
 
-		self.target_op = self._rewards+self.discount*V*(1-self._terminals)
+		self.loss = tf.reduce_sum(tf.square(self.y_ - Q_sa_online))
 
 	def getMiniBatch(self, batchSize):
 		(cstates, actions, rewards, nstates, done) = self.replayMemory.getMiniBatch(batchSize)
@@ -93,15 +100,11 @@ class DQN():
 
 	def getModel(self, dim_input, dim_ouput):
 
-		x  = tf.placeholder(tf.float32, shape=[None, dim_input])
-		a  = tf.placeholder(tf.float32, shape=[None, dim_ouput] ) 
-		y_ = tf.placeholder(tf.float32, shape=[None])
-
 		# first layer
 		W1 = weight_variable([dim_input, 300])
 		b1 = bias_variable([300])
 
-		first_layer = tf.nn.relu(tf.matmul(x,W1)+b1)
+		first_layer = tf.nn.relu(tf.matmul(self._input,W1)+b1)
 
 		# second layer
 		W2 = weight_variable([300,100])
@@ -124,15 +127,15 @@ class DQN():
 		third_activation = tf.matmul(second1_layer, W3) + b3
 		#third_layer = tf.nn.relu(third_activation)
 		third_layer = third_activation
-		y = tf.reduce_sum(tf.mul(third_layer,a) , reduction_indices=[1])
+		# y = tf.reduce_sum(tf.mul(third_layer,self.a) , reduction_indices=[1])
 
-		model = {"state_placeholder" : x,
-				 "Q_s" : third_layer,
-				 "Q_sa": y,
-				 "target_placeholder": y_,
-				 "action_placeholder": a}
+		# model = {"state_placeholder" : x,
+		# 		 "Q_s" : third_layer,
+		# 		 "Q_sa": y,
+		# 		 "target_placeholder": y_,
+		# 		 "action_placeholder": a}
 
-		return model
+		return third_layer
 
 
 	def updateTargetNetwork(self, sess):
@@ -141,9 +144,7 @@ class DQN():
 
 
 	def egreedy_policy(self, net, state, epsilon=0.0):
-		Q_s = net['Q_s']
-		x   = net['state_placeholder']
-		Q_values = Q_s.eval(feed_dict = {x:[state]})[0]
+		Q_values = net.eval(feed_dict = {self._input:[state]})[0]
 
 		if random.random() < epsilon:
 			return random.randint(0,self.nActions - 1)
