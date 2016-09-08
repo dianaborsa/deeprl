@@ -84,7 +84,7 @@ class DQN():
 		
 		self.target_op = self._rewards+self.discount*V_target*(1-self._terminals)
 
-		self.loss = tf.reduce_sum(tf.square(self.y_ - Q_sa_online))
+		self.loss = tf.reduce_mean(tf.square(self.y_ - Q_sa_online))
 
 	def getMiniBatch(self, batchSize):
 		(cstates, actions, rewards, nstates, done) = self.replayMemory.getMiniBatch(batchSize)
