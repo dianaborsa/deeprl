@@ -32,17 +32,16 @@ ENV_NAME = 'CartPole-v1'
 #ENV_NAME = 'Riverraid-ram-v0'
 #ENV_NAME = 'Skiing-ram-v0'
 #ENV_NAME = 'CrazyClimber-ram-v0'
-REPLAY_SIZE = 10000 # max replay buffer
+REPLAY_SIZE = 20000 # max replay buffer
 
 ERROR_THRESHOLD= 10^-5
 
 
-MODEL_DIR = '../exp/'+ENV_NAME+'_ml/models'
+MODEL_DIR = '../exp/'+ENV_NAME+'_dqn/models'
 SUMMARY_SAVE_PATH = '../exp/'+ENV_NAME+'_dqn/tb_logs/ep_'+str(FLAGS.nEpisodes)+'_'+str(FLAGS.nSamples)+'/lr_'+str(FLAGS.learningRateIndex)
 CHECKPOINT_SAVE_PATH = SUMMARY_SAVE_PATH+'_model.ckpt'
 BESTMODEL_SAVE_PATH  = SUMMARY_SAVE_PATH+'_best_model.ckpt'
 
-MODEL_DIR = '../exp/'+ENV_NAME+'_oc/models'
 try:
 	os.stat(MODEL_DIR)
 except:
@@ -60,6 +59,7 @@ def playoutEpisode(env, agent, nSamples, RENDERING_FLAG=False, epsilon=0.9):
 			env.render()
 		# take action and observe outcome
 		nstate, reward, done, _ = env.step(action)
+		reward = np.clip(reward, -1, 1)
 
 		total_reward = total_reward+reward
 
@@ -71,7 +71,7 @@ def playoutEpisode(env, agent, nSamples, RENDERING_FLAG=False, epsilon=0.9):
 	return episode, total_reward
 
 def collectEpisode(env, agent, nSamples, RENDERING_FLAG=False, epsilon=0.9):
-	episode, _ = playoutEpisode(env, agent, nSamples, False)
+	episode, _ = playoutEpisode(env, agent, nSamples, False, epsilon=0.1)
 	agent.replayMemory.addExperienceToMemory(episode)
 
 def collectExperience(env, agent, nEpisodes, nSamples):
@@ -231,6 +231,9 @@ if __name__ == '__main__':
 
 	tf.flags.FLAGS._parse_flags()	
 	tf.set_random_seed(FLAGS.random_seed)
-	# #tf.app.run()
+
+	print("Run with random seed: %d"%FLAGS.random_seed)
+	np.random.seed(FLAGS.random_seed)
+	random.seed(FLAGS.random_seed)
 	
 	main()
